@@ -88,7 +88,12 @@ local schema = {
     config_file = {
       description = "config.yaml path. Needed if update_config is set to true",
       type = "string",
-      default = "/usr/local/apisix/conf/config.yaml"
+      default = "/usr/local/apisix/conf/config.yaml",
+    },
+    hot_reload = {
+      description = "Wheter or not to perform hot reload after changing the config",
+      type = "boolean",
+      default = false,
     },
     required = { "plugins" },
     additionalProperties = false,
@@ -97,7 +102,7 @@ local schema = {
 
 
 local _M = {
-  version = 0.1,
+  version = 0.2,
   priority = 0,
   name = plugin_name,
   schema = schema,
@@ -115,11 +120,6 @@ function _M.check_schema(conf, schema_type)
     end
   end
 
-  -- Create path if it's missing and conf option is enabled
-  if conf.destination.create_if_missing then
-    -- todo
-  end
-
   for _, plugin in ipairs(conf.plugins) do
     if not plugin.name and not plugin.validate then
       core.log.error("Either plugin.name must be set or plugin.validate must be true")
@@ -131,8 +131,6 @@ function _M.check_schema(conf, schema_type)
   if conf.update_config then
     -- todo
   end
-
-  -- core.log.error("check_schema")
 
   return core.schema.check(schema, conf)
 end
@@ -177,41 +175,83 @@ function _M.rewrite(conf, ctx)
 
     -- Validate plugin (via apisix module?)
     if plugin.validate then
+      -- validate
+
       -- Get name if plugin.name is not set
     end
 
-    local file_path = conf.destination.path .. plugin.name
-    local file_dest, err = io.open(file_path, "w")
-    if not file_dest then
-      os.execute("mkdir -p $(dirname " .. conf.destination.path .. ")")
-
-      file_dest, err = io.open(conf.destination.path, "w")
-      if not file_dest then
-        core.log.error("Error: " .. err)
-
-        results[index].error = err
+    -- Check if directory exists
+    local suc, exitcode, code = os.execute("test -d " .. conf.destination.path)
+    if not suc or code ~= 0 then
+      if conf.destination.create_if_missing then
+        -- Create directory
+        os.execute("mkdir -p " .. conf.destination.path)
+      else
         goto continue
       end
+    end
+
+    local file_path = conf.destination.path .. plugin.name .. ".lua"
+    local file_dest, err = io.open(file_path, "w")
+    if not file_dest then
+      core.log.error("Error: " .. err)
+
+      results[index].error = err
+      goto continue
     end
 
     file_dest:write(res.body)
     file_dest:close()
 
     results[index].result = true
-    -- results[index].body = res.body
-
-    -- return 200, res.body
 
     ::continue::
   end
 
-  core.log.warn("Summary:\n")
-
   -- Update config
   if conf.update_config then
-    local file_config, err = io.open(conf.config_file, "w")
+    local file_config, err = io.open(conf.config_file, "r")
+    if not file_config then
+      core.log.error("Couldn't open config file " .. conf.config_file .. ". Error: " .. err)
+      return 500, err
+    end
 
-    os.execute("apisix reload")
+    local config = file_config:read("*all")
+    file_config:close()
+
+    -- Create a new list of plugins
+    local new_plugins = {}
+    for _, result in pairs(results) do
+      if result.result then
+        new_plugins[#new_plugins + 1] = result.name
+      end
+    end
+
+    local config_table = lyaml.load(config)
+    core.log.warn("testttt " .. core.json.encode(config_table))
+    if not config_table.plugins then
+      config_table.plugins = {}
+    end
+
+    -- Insert plugins
+    for _, new_plugin in ipairs(new_plugins) do
+      table.insert(config_table.plugins, new_plugin)
+    end
+
+    file_config, err = io.open(conf.config_file, "w")
+    if not file_config then
+      core.log.error("Couldn't open config file " .. conf.config_file .. ". Error: " .. err)
+      return 500, err
+    end
+
+    local config_yaml = lyaml.dump({ config_table })
+    config_yaml = config_yaml:gsub('%-%-%-', ""):gsub('%.%.%.', "")
+    file_config:write(config_yaml .. "\n#END")
+    file_config:close()
+
+    if conf.hot_reload then
+      os.execute("apisix reload")
+    end
   end
 
   return 200, results
