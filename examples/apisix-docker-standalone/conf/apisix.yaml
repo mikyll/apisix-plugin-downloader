@@ -8,22 +8,43 @@ upstreams:
 routes:
   # Simple route to internal service
   - id: base_internal
-    uri: /get
+    uri: /anything
     upstream_id: internal_httpbin
 
-  # Route with demo plugin
-  - id: demo
-    uri: /demo
+  # This API downloads error-page custom plugin with no SSL verification
+  - id: downloader
+    uri: /download
     upstream_id: internal_httpbin
     plugins:
-      demo:
-        body: "Hello from demo plugin!"
+      downloader:
+        plugins:
+          - source:
+              url: https://raw.githubusercontent.com/mikyll/apisix-plugin-error-page/refs/heads/main/apisix/plugins/error-page.lua
+              ssl_verify: false
+            name: error-page
+            validate: true
+        destination:
+          path: "/usr/local/apisix/apisix/plugins/custom/apisix/plugins/"
+          create_if_missing: true
+        update_config: false
 
-  # Public API from demo plugin
-  - id: demo_public_api
-    uri: /apisix/plugin/demo/public_api
+  # This API downloads error-page custom plugin with SSL verification, and hot reloads APISIX
+  - id: downloader_update
+    uri: /download_update
     upstream_id: internal_httpbin
     plugins:
-      public-api: {}
-      
+      downloader:
+        plugins:
+          - source:
+              url: https://raw.githubusercontent.com/mikyll/apisix-plugin-error-page/refs/heads/main/apisix/plugins/error-page.lua
+              ssl_verify: true
+            name: error-page
+            validate: true
+        destination:
+          path: "/usr/local/apisix/apisix/plugins/custom/apisix/plugins/"
+          create_if_missing: true
+        update_config: true
+        config_file: /usr/local/apisix/conf/config.yaml
+        hot_reload: true
+
 #END
